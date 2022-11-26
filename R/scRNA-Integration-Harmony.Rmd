@@ -1,0 +1,59 @@
+
+----------------------
+Title: scRNA-seq Integration using Harmony
+Author: poloarol
+Date: Nov, 2022
+----------------------
+
+# Integration with Harmony vs Seurat
+
+```
+
+- Seurat uses CCA, while Harmony iterate util convergence, no integrated object
+  It produces embeddings instead
+
+
+```
+
+```
+# Load packages
+
+if (!require('pacman')) install.packages("pacman")
+ 
+# Load contributed packages with pacman
+pacman::p_load(Seurat, tidyverse, ggplot2)
+
+## Trouble installing Harmony. Need to check out this bug
+devtools::install_github("immunogenomics/presto")
+devtools::install_github("immunogenomics/harmony")
+library(harmony)
+
+3devtools::install_github('satijalab/seurat-data')
+library(SeuratData)
+
+
+1```
+
+# 1. Get Data -------------
+
+```
+
+InstallData("ifnb")
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

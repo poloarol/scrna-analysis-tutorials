@@ -1,0 +1,80 @@
+
+# Single-Cell RNA-Seq data formats
+
+## Input files formats
+
+- Stored as Feature-Barcode Sparse Matrices
+- 10X hdf5 -> .hdf5
+- R Data format -> .rds
+- AnnData Object -> .h5ad
+- Loom -> .loom
+- Text-based Market Exchange Format -> .mtx
+
+```
+
+if (!require('pacman')) install.packages("pacman")
+
+```
+
+```
+
+# Load contributed packages with pacman
+pacman::p_load(Seurat, tidyverse)
+
+```
+
+```
+
+if (!requireNamespace("remotes", quietly = TRUE)) {
+  install.packages("remotes")
+}
+remotes::install_github("mojaveazure/seurat-disk")
+
+```
+
+
+```
+library(Seurat)
+library(SeuratDisk)
+```
+
+```
+# Read .RDS format
+## rds_obj <- readRDS(filepath)
+
+# 10X CellRanger .HDF5 format
+## hdf5_obj <- Read10X-h5(filepath)
+## seurat_obj <- CreateSeuratObject(counts=hdf5_obj) # Convert to Seurat object
+
+# .mtx file
+## mtx_obj <- ReadMtx(filepath, features, cells)
+## Convert to a Seurat Object later
+
+# .loom file
+## loom_obj <- Connect(filename="*.loom", mode="r)
+## seurat_loom <- as.Seurat(loom_obj)
+
+# AnnData (.h5ad) format
+## Step 1. convert AnnData object to h5Seurat file
+## Convert("*.h5ad", des="h5seurat, overwrite=TRUE)
+
+## Step2. Load h5Seurat into Seurat Object
+## seurat_anndata_obj <- LoadH5Seurat(".h5Seurat")
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

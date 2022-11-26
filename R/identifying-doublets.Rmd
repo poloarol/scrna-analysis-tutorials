@@ -1,0 +1,229 @@
+
+----------------------------
+Title: Doublet Identification
+Author: poloarol
+Date: Nov. 2022
+----------------------------
+
+
+# Doublet Identification
+
+## a. What are doublets?
+    - Doublets occur when multiple cells are present within a single bead. They are technical artifacts and need to be dealt with
+
+## b. Types of doublets:
+### - Homotypic doublets
+      Derived from transcriptionally similar cells
+
+### - Heterotypic doublets
+      Derived from transcriptionally distinct cells
+
+### NB: Doublet Finder is more sentive to heterotypic doublets, than homotypic doublets. 
+###     It would be intereting to see how this method compares to SOLO
+
+## c. DoubletFinder needs three paramters to work
+    - pN: the number of artificial doublets
+    - pK: the neighbourhood size (pK) used to compute the number of artificial nearest neighbours
+    - Exp: the number of expected real doublets
+
+## d. Workflow
+    1. Simulate Doublets form original dataset
+    2. Artificial and real datasets are merged, and seurat workflow standard workflow begins
+    3. Dim. Reduction on the datasets
+    4. Define Neighbours using k-NN
+    5. Use the threshold identified to predict real doublets
+    6. Remove the data doublets
+    
+# Best Practices
+  1. Do not apply DoubletFinder on aggregated scRNA-seq data (X)
+  2. Not preferable to run on merged data (X)
+  3. Should be run on distinct samples separately
+  4. Input data should be cleared of low-quality cells
+  5. Remove clusters with low RNA UMIs, high mitochondrial read percentage and uninformative marker genes
+
+## Worflow
+
+#### a. Loading and extracting dataset
+
+```
+if (!require('pacman')) install.packages("pacman")
+
+# Load contributed packages with pacman
+pacman::p_load(Seurat, tidyverse, ggplot, remotes)
+
+remotes::install_github('chris-mcginnis-ucsf/DoubletFinder')
+
+```
+
+```
+
+## a. Extracting files -------
+
+# Untar GSE___ file
+
+main_path <-"C:\\Users\\user\\OneDrive\\Desktop\\learning-R-lang\\scRNA-seq\\datasets"
+untar(paste0(main_path, "\\", "10k_PBMC_3p_nextgem_Chromium_Controller_raw_feature_bc_matrix.tar.gz"), exdir = main_path)
+
+```
+
+#### b. Create Matrix object
+
+```
+
+cts <- ReadMtx(mtx=paste0(main_path, "\\raw_feature_bc_matrix\\matrix.mtx.gz"),
+                              cells=paste0(main_path, '\\raw_feature_bc_matrix\\barcodes.tsv.gz'),
+                              features=paste0(main_path, "\\raw_feature_bc_matrix\\features.tsv.gz"))
+
+cts[1:10, 1:10]
+
+```
+
+#### c. Create Seurat Object
+
+```
+
+pbmc.seurat <- CreateSeuratObject(counts=cts)
+View(pbmc.seurat@meta.data)
+
+
+```
+
+#### d. QC and Filtering
+
+```
+
+pbmc.seurat$percent.mt <- PercentageFeatureSet(pbmc.seurat, pattern="^MT-")
+pbmc.seurat.filtered <- subset(pbmc.seurat, subset= nCount_RNA > 800 
+                            & nFeature_RNA > 500 & percent.mt < 10)
+
+
+```
+
+#### d. Pre-process standard workflow
+
+```
+
+pbmc.seurat.filtered <- NormalizeData(object = pbmc.seurat.filtered)
+pbmc.seurat.filtered <- FindVariableFeatures(object = pbmc.seurat.filtered)
+pbmc.seurat.filtered <- ScaleData(object = pbmc.seurat.filtered)
+pbmc.seurat.filtered <- RunPCA(object = pbmc.seurat.filtered)
+
+```
+
+```
+
+ElbowPlot(pbmc.seurat.filtered)
+
+```
+
+```
+
+pbmc.seurat.filtered <- FindNeighbors(object = pbmc.seurat.filtered, dims=1:20)
+pbmc.seurat.filtered <- FindClusters(object = pbmc.seurat.filtered)
+pbmc.seurat.filtered <- RunUMAP(object = pbmc.seurat.filtered, dims=1:20)
+
+
+```
+
+## pk Identification (no ground-truth)
+
+
+```
+
+library(DoubletFinder)
+
+sweep.res.list.pbmc <- paramSweep_v3(pbmc.seurat.filtered, PCs = 1:20, sct = FALSE)
+sweep.stats.pbmc <- summarizeSweep(sweep.res.list.pbmc, GT = FALSE)
+bcmvn.pbmc <- find.pK(sweep.stats.pbmc)
+
+ggplot(bcmvn.pbmc, aes(pK, BCmetric, group=1)) +
+  geom_point() +
+  geom_line()
+
+
+```
+
+```
+
+pK <- bcmvn.pbmc %>%
+        filter(BCmetric == max(BCmetric)) %>%
+        select(pK)
+
+pK <- as.numeric(as.character(pK[[1]]))
+
+```
+
+#### a. Homotypic Doublet Proportio Estimate
+
+```
+
+annotations <- pbmc.seurat.filtered@meta.data$seurat_clusters
+homotypic.prop <- modelHomotypic(annotations)
+nExp_poi <- round(0.076*nrow(pbmc.seurat.filtered@meta.data)) # Assume 7.5% of doublets formerd
+nExp_poi.adj <- round(nExp_poi * (1-homotypic.prop)
+
+
+```
+
+#### b. Run DoubletFinder
+
+```
+
+pbmc.seurat.obj <- doubletFinder_v3(pbmc.seurat.filtered,
+                      PCs = 1:20,
+                      pN = 0.25,
+                      pK = pK,
+                      nExp = nExp_poi,
+                      reuse.pANN = FALSE, sct = FALSE)
+
+
+```
+
+#### c. visualize doublets
+
+```
+
+DimPlot(pbmc.seurat.obj, reduction="umap", group.by = "DF.classifications_0.25_0.2_761")
+
+
+```
+
+
+#### d. Number of singles and doublets
+table(pbmc.seurat.obj@meta.data$DF.classifications_0.25_0.2_761)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

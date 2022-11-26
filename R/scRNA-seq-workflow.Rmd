@@ -1,0 +1,33 @@
+|                                   |
+|-----------------------------------|
+| Title: Standard scRNA-seq Worflow |
+| Author: poloarol                  |
+| Date: Nov. 2022                   |
+
+### 1. Standard Workflow
+
+      a. Count Matrix
+      b. QC and filtering
+      c. Normalization
+      d. Identification of variable
+      e. Scale data
+      f. Linear dimensionality reduction
+      g. Clustering
+      h. Non-linear dimensionality reduction
+
+### 2. Downstream Analysis
+      
+      a. Cluster Identification
+      b. Differential Gene Expression
+      c. Differential Chromatin Accessibility Analysis
+      d. Inferring trajectoris/lineages
+
+
+
+
+
+
+
+
+
+

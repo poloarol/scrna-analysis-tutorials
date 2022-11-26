@@ -1,0 +1,31 @@
+
+---------------------------
+
+Title: Identifying Differentially Expressed Genes in scRNA-seq datasets
+Author: poloarol
+Date: Nov. 2022
+
+---------------------------
+
+# Finding Differetially Expressed Markers
+
+  - Find Markers (findMarkers)
+  - Find All Markers (findAllMarkers)
+  - Find Conserved Markers across Conditions (findConservedMarkers)
+
+
+```
+# Load packages
+
+if (!require('pacman')) install.packages("pacman")
+ 
+# Load contributed packages with pacman
+pacman::p_load(Seurat, tidyverse, ggplot2)
+
+
+devtools::install_github('satijalab/seurat-data')
+library(SeuratData)
+
+set.seed(1234)
+
+```
