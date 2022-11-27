@@ -1,0 +1,32 @@
+---
+title: "bulkrna-vs-scrna-seq"
+output: html_document
+date: "2022-11-27"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Bulk RNA-Seq
+- Gene Expression or quantificuation values averaged across cells
+- Allow comparison of healthy vs sick patients
+- Cell heterogeniety is masked
+
+Processing
+----------
+1. Quality Control
+2. Preprocessing
+3. Map clean reads to genome or transcriptome
+4. Assemble reads to transcript
+5. Differential Expression analysis
+
+## Single-Cel RNA-seq
+- Individual cells, and expression of genes within these cells, hence allowing for segregation
+- Identifies which genes are differential expressed within each cell
+- Reveals heterogeneity
+
+Downstream analysis:
+1. Gene Functional Enrichment Analysis
+2. Weighted Gene Co-expression Network Analysis
+3. Cell clustering and Cell type annotation

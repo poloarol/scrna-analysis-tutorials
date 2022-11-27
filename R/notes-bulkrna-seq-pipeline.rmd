@@ -1,0 +1,22 @@
+---
+title: "Bulk RNA-Seq worflow pipeline"
+output: html_notebook
+---
+
+1. Quality Control: FastQ, FastQScreen, FASTX
+2. Trimming: Skewer, Trimmomatic
+3. Mapping
+    a. Splice-aware aligners (to genome) - STAR,Topha2, HISTA2 Output -> BAM
+    b. Aligners (to transcriptome) - Bowtie2, BWA, GEM - output -> BAM
+    c. Quasi-mappers (to transcriptome) - Salmon, Kalisto output -> Counts
+
+Pipeline 1. FastQ -> FastQC, Trimmomatic -> HISAT2 -> featureCounts
+Pipeline 2. FastQ -> FastQC, Trimmomatic -> STAR -> RSEM
+
+Choice of aligner
+-----------------
+1. Identigy novel genetic variants / RNA-editing
+2. Allele-specific expression
+3. Genome Annotation
+4. Gene and transcript discovery
+5. Differential Expression
