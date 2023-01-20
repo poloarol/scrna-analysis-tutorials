@@ -1,0 +1,199 @@
+# Clustering and Labelling scRNAseq data
+
+## Goal
+
+Here we will be using clustering our single-cell RNAseq data set using Seurat and labeling the various cells using both SingleR.
+
+```{r}
+    if (!require("pacman", quietly = TRUE))
+        install.packages("pacman")
+        
+    p_load(pacman, Seurat, SingleR, scRNAseq, ExperimentHub, scuttle)
+
+```
+
+## Load dataset
+
+```{r}
+
+
+data <- Read10X(data.dir = "../../data/rnaseq/pbmc3k/")
+seurat_obj <- CreateSeuratObject(counts = data, project = "pbmc3k", min.cells =3, min.features = 200)
+
+seurat_obj
+
+```
+
+## Standard preprocessing workflow
+
+```{r}
+
+# The [[ operator can add columns to object metadata. This is a great place to stash QC stats
+seurat_obj[["percent.mt"]] <- PercentageFeatureSet(seurat_obj, pattern = "^MT-")
+
+# Visualize QC metrics as a violin plot
+VlnPlot(seurat_obj, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+
+```
+
+```{r}
+
+# FeatureScatter is typically used to visualize feature-feature relationships, but can be used
+# for anything calculated by the object, i.e. columns in object metadata, PC scores etc.
+
+plot1 <- FeatureScatter(seurat_obj, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(seurat_obj, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1 + plot2
+
+
+```
+
+### Filtering the dataset
+
+```{r}
+
+subset_seurat <- subset(seurat_obj, subset = nFeature_RNA > 200 & nFeature_RNA < 2500 & percent.mt < 5)
+subset_seurat
+
+```
+
+### Data Normalization
+
+```{r}
+
+subset_seurat <- NormalizeData(subset_seurat)
+subset_seurat
+
+```
+
+## Identification of highly variable features
+
+```{r}
+
+subset_seurat <- FindVariableFeatures(subset_seurat, selection.method = "vst", nfeatures = 2000)
+
+# Identify the 10 most highly variable genes
+top10 <- head(VariableFeatures(subset_seurat), 10)
+
+# plot variable features with and without labels
+plot1 <- VariableFeaturePlot(subset_seurat)
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+plot2
+
+all.genes <- rownames(subset_seurat)
+subset_seurat <- ScaleData(subset_seurat, features = all.genes)
+
+```
+
+## Linear Dimensionality reduction (PCA)
+
+```{r}
+
+subset_seurat <- RunPCA(subset_seurat, features = VariableFeatures(object = subset_seurat))
+
+# Examine and visualize PCA results a few different ways
+print(subset_seurat[["pca"]], dims = 1:5, nfeatures = 10)
+
+DimPlot(subset_seurat, reduction = "pca")
+
+ElbowPlot(subset_seurat)
+
+```
+
+## Finding Shared Nearest Neighbours: Clustering
+
+```{r}
+
+subset_seurat <- FindNeighbors(subset_seurat, dims = 1:10)
+subset_seurat <- FindClusters(subset_seurat, resolution = 0.5)
+
+# Look at cluster IDs of the first 5 cells
+head(Idents(subset_seurat), 5)
+
+```
+
+## Dimensionality reduction
+
+### a. UMAP
+
+```{r}
+
+# If you haven't installed UMAP, you can do so via reticulate::py_install(packages =
+# 'umap-learn')
+umap_seurat <- RunUMAP(subset_seurat, dims = 1:10)
+
+# note that you can set `label = TRUE` or use the LabelClusters function to help label
+# individual clusters
+DimPlot(umap_seurat, reduction = "umap")
+
+```
+
+### b. t-SNE
+
+```{r}
+
+tsne_seurat <- RunTSNE(subset_seurat, dims = 1:10)
+
+# note that you can set `label = TRUE` or use the LabelClusters function to help label
+# individual clusters
+DimPlot(tsne_seurat, reduction = "tsne")
+
+```
+
+## Labelling cell data using SingleR
+
+### a. UMAP
+
+```{r}
+
+datasetInput = celldex::HumanPrimaryCellAtlasData()
+
+result <- SingleR(test = as.SingleCellExperiment(umap_seurat), ref = datasetInput, labels = datasetInput$label.main)
+umap_seurat$singlr_labels <- result$labels
+
+DimPlot(umap_seurat, reduction = "umap", group.by = "singlr_labels", label = TRUE)
+
+```
+
+### b. t-SNE
+
+```{r}
+
+result <- SingleR(test = as.SingleCellExperiment(tsne_seurat), ref = datasetInput, labels = datasetInput$label.main)
+tsne_seurat$singlr_labels <- result$labels
+
+DimPlot(tsne_seurat, reduction = "tsne", group.by = "singlr_labels", label = TRUE)
+
+```
+
+## Labelling cell data using scRNAseq
+
+```{r}
+
+# Here I wanted to use a more refined dataset for the annotation
+# but it does not seem to work. Need to investigate this further
+
+# pbmc <- KotliarovPBMCData(ensembl=TRUE, location=TRUE)
+# pbmc
+
+# ref <- SingleR(as.SingleCellExperiment(umap_seurat), ref = pbmc, assay.type.test=1, labels = )
+# ref
+
+```
+
+## Save Data
+
+```{r}
+
+saveRDS(umap_seurat, file = "../../output/scrnaseq/pbmc_scrnaseq.rds")
+
+
+```
+
+Unload packages
+```{r}
+
+p_unload(pacman, Seurat, SingleR, scRNAseq)
+rm(list = ls())
+
+```

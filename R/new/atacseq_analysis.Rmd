@@ -1,0 +1,332 @@
+
+
+## Goal
+
+Here we would analysis ATACseq data from the PBMC dataset,
+using both the Signac package and finally intergrate it with
+our previous clustering of the scRNAseq data.
+
+## Load Packages
+
+```{r}
+    if (!require("pacman", quietly = TRUE))
+        install.packages("pacman")
+        
+    p_load(pacman, Seurat, Signac, ggplot2, EnsDb.Hsapiens.v75)
+
+```
+
+
+## Load Data
+
+```{r}
+
+counts <- Read10X_h5(filename = "../../data/atacseq/pbmc3k/atac_v1_pbmc_10k_filtered_peak_bc_matrix.h5")
+metadata <- read.csv(
+  file = "../../data/atacseq/pbmc3k/atac_v1_pbmc_10k_singlecell.csv",
+  header = TRUE,
+  row.names = 1
+)
+
+chrom_assay <- CreateChromatinAssay(
+  counts = counts,
+  sep = c(":", "-"),
+  genome = 'hg19',
+  fragments = '../../data/atacseq/pbmc3k/atac_v1_pbmc_10k_fragments.tsv.gz',
+  min.cells = 10,
+  min.features = 200
+)
+
+seurat_obj <- CreateSeuratObject(
+  counts = chrom_assay,
+  assay = "peaks",
+  meta.data = metadata
+)
+
+
+seurat_obj
+
+```
+
+## Annotation
+
+```{r}
+
+# extract gene annotations from EnsDb
+annotations <- GetGRangesFromEnsDb(ensdb = EnsDb.Hsapiens.v75)
+
+# change to UCSC style since the data was mapped to hg19
+seqlevelsStyle(annotations) <- 'UCSC'
+
+# add the gene information to the object
+Annotation(seurat_obj) <- annotations
+
+```
+
+
+
+## Quality Control
+
+```{r}
+
+# compute nucleosome signal score per cell
+seurat_obj <- NucleosomeSignal(object = seurat_obj)
+
+# compute TSS enrichment score per cell
+seurat_obj <- TSSEnrichment(object = seurat_obj, fast = FALSE)
+
+# add blacklist ratio and fraction of reads in peaks
+seurat_obj$pct_reads_in_peaks <- seurat_obj$peak_region_fragments / seurat_obj$passed_filters * 100
+seurat_obj$blacklist_ratio <- seurat_obj$blacklist_region_fragments / seurat_obj$peak_region_fragments
+
+```
+
+
+### Transcriptional start site (TSS) Enrichment score
+
+```{r}
+
+seurat_obj$high.tss <- ifelse(seurat_obj$TSS.enrichment > 2, 'High', 'Low')
+TSSPlot(seurat_obj, group.by = 'high.tss') + NoLegend()
+
+```
+
+
+### Mononuclesome vs. Nucleosome-free ratio
+
+```{r}
+
+seurat_obj$nucleosome_group <- ifelse(seurat_obj$nucleosome_signal > 4, 'NS > 4', 'NS < 4')
+FragmentHistogram(object = seurat_obj, group.by = 'nucleosome_group')
+
+```
+
+
+### Quality control metrics
+
+```{r}
+
+VlnPlot(
+  object = seurat_obj,
+  features = c('pct_reads_in_peaks', 'peak_region_fragments',
+               'TSS.enrichment', 'blacklist_ratio', 'nucleosome_signal'),
+  pt.size = 0.1,
+  ncol = 5
+)
+
+```
+
+
+### Filtering
+
+```{r}
+
+low_prf <- quantile(seurat_obj[["peak_region_fragments"]]$peak_region_fragments, probs = 0.02)
+high_prf <- quantile(seurat_obj[["peak_region_fragments"]]$peak_region_fragments, probs = 0.98)
+low_prp <- quantile(seurat_obj[["pct_reads_in_peaks"]]$pct_reads_in_peaks, probs = 0.02)
+high_blr <- quantile(seurat_obj[["blacklist_ratio"]]$blacklist_ratio, probs = 0.98)
+high_ns <- quantile(seurat_obj[["nucleosome_signal"]]$nucleosome_signal, probs = 0.98)
+low_ts <- quantile(seurat_obj[["TSS.enrichment"]]$TSS.enrichment, probs = 0.02)
+
+
+subset_seurat <- subset(
+  x = seurat_obj,
+  subset = peak_region_fragments > low_prf &
+    peak_region_fragments < high_prf &
+    pct_reads_in_peaks > low_prp &
+    blacklist_ratio < high_blr &
+    nucleosome_signal < high_ns &
+    TSS.enrichment > low_ts
+)
+
+subset_seurat
+
+
+```
+
+##Normalization and Linear dimensionality reduction
+
+### Normalization
+
+```{r}
+
+subset_seurat <- RunTFIDF(subset_seurat)
+subset_seurat <- FindTopFeatures(subset_seurat, min.cutoff = 'q0')
+subset_seurat <- RunSVD(subset_seurat)
+
+DepthCor(subset_seurat)
+
+```
+
+
+### Linear dimensionality reduction
+
+```{r}
+
+subset_seurat <- RunUMAP(object = subset_seurat, reduction = 'lsi', dims = 2:30)
+subset_seurat <- FindNeighbors(object = subset_seurat, reduction = 'lsi', dims = 2:30)
+subset_seurat <- FindClusters(object = subset_seurat, verbose = FALSE, algorithm = 3)
+
+DimPlot(object = subset_seurat, label = TRUE) + NoLegend()
+
+```
+
+
+## Gene Activity Matrix
+
+```{r}
+
+gene.activities <- GeneActivity(subset_seurat)
+
+# add the gene activity matrix to the Seurat object as a new assay and normalize it
+subset_seurat[['RNA']] <- CreateAssayObject(counts = gene.activities)
+subset_seurat <- NormalizeData(
+  object = subset_seurat,
+  assay = 'RNA',
+  normalization.method = 'LogNormalize',
+  scale.factor = median(subset_seurat$nCount_RNA)
+)
+
+DefaultAssay(subset_seurat) <- 'RNA'
+
+FeaturePlot(
+  object = subset_seurat,
+  features = c('MS4A1', 'CD3D', 'LEF1', 'NKG7', 'TREM1', 'LYZ'),
+  pt.size = 0.1,
+  max.cutoff = 'q95',
+  ncol = 3
+)
+
+
+```
+
+## Integrating with scRNA-seq data
+
+This would allow us to transfer scRNA-seq labels
+to scATAC-seq data.
+
+```{r}
+
+# Load the pre-processed scRNA-seq data for PBMCs
+pbmc_rna <- readRDS("../../output/scrnaseq/pbmc_scrnaseq.rds")
+
+transfer.anchors <- FindTransferAnchors(
+  reference = pbmc_rna,
+  query = subset_seurat,
+  reduction = 'cca'
+)
+
+predicted.labels <- TransferData(
+  anchorset = transfer.anchors,
+  refdata = pbmc_rna$singlr_labels,
+  weight.reduction = subset_seurat[['lsi']],
+  dims = 2:30
+)
+
+subset_seurat <- AddMetaData(object = subset_seurat, metadata = predicted.labels)
+
+
+```
+
+```{r}
+
+plot1 <- DimPlot(
+  object = pbmc_rna,
+  group.by = 'singlr_labels',
+  label = TRUE,
+  repel = TRUE) + NoLegend() + ggtitle('scRNA-seq')
+
+plot2 <- DimPlot(
+  object = subset_seurat,
+  group.by = 'predicted.id',
+  label = TRUE,
+  repel = TRUE) + NoLegend() + ggtitle('scATAC-seq')
+
+plot1 + plot2
+
+```
+
+```{r}
+
+subset_seurat <- subset(subset_seurat, idents = 9, invert = TRUE)
+subset_seurat <- RenameIdents(
+  object = subset_seurat,
+  '0' = 'B Cell',
+  '1' = 'CMP',
+  '2' = 'Monocyte',
+  '3' = 'NK Cell',
+  '4' = 'CD14 Mono',
+  '5' = 'Platelets',
+  '6' = 'Pre B-cells CD34-',
+  '7' = 'Pro B-cells CD34+',
+  '8' = 'T Cell'
+)
+
+```
+
+
+## Identifying Differentially Accessible Peaks between Clusters
+
+```{r}
+
+# change back to working with peaks instead of gene activities
+DefaultAssay(subset_seurat) <- 'peaks'
+
+da_peaks <- FindMarkers(
+  object = subset_seurat,
+  ident.1 = "B Cell",
+  ident.2 = "NK Cell",
+  test.use = 'LR',
+  latent.vars = 'peak_region_fragments'
+)
+
+head(da_peaks)
+
+
+```
+
+
+```{r}
+
+plot1 <- VlnPlot(
+  object = subset_seurat,
+  features = rownames(da_peaks)[1],
+  pt.size = 0.1,
+  idents = c("B Cell","NK Cell")
+)
+plot2 <- FeaturePlot(
+  object = subset_seurat,
+  features = rownames(da_peaks)[1],
+  pt.size = 0.1
+)
+
+plot1 | plot2
+
+
+```
+
+
+## Plotting genomic regions
+
+```{r}
+
+# set plotting order
+# levels(subset_seurat) <- c("CD4 Naive","CD4 Memory","CD8 Naive","CD8 Effector","DN T","NK CD56bright","NK CD56Dim","pre-B",'pro-B',"pDC","DC","CD14 Mono",'CD16 Mono')
+
+CoveragePlot(
+  object = subset_seurat,
+  region = rownames(da_peaks)[1],
+  extend.upstream = 40000,
+  extend.downstream = 20000
+)
+
+
+```
+
+
+
+
+
+
+
+
