@@ -1,0 +1,347 @@
+
+
+# Goal
+The goal of this analysis is to 
+gain insights from ATACseq data,
+to determine the effect of aging on
+mouse transcriptome and chromatin 
+accessibility
+
+## Load packages
+
+```{r}
+
+    if (!require("pacman", quietly = TRUE))
+        install.packages("pacman")
+        
+    p_load(pacman, Seurat, ggplot2, Signac, EnsDb.Mmusculus.v79)
+
+```
+
+
+## Load data
+
+```{r}
+
+load_data <- function(genome, count_path, meta_path, fragment_path){
+  counts <- Read10X_h5(filename = count_path)
+  metadata <- read.csv(
+    file = meta_path,
+    header = TRUE,
+    row.names = 1
+  )
+  
+  chrom_assay <- CreateChromatinAssay(
+    counts = counts,
+    sep = c(":", "-"),
+    genome = genome,
+    fragments = fragment_path,
+    min.cells = 10,
+    min.features = 200
+  )
+  
+  seurat_obj <- CreateSeuratObject(
+    counts = chrom_assay,
+    assay = "peaks",
+    meta.data = metadata
+  )
+  
+  
+  return(seurat_obj)
+}
+
+```
+
+## Annotation
+
+```{r}
+
+add_annotations <- function(seurat_obj){
+ 
+  # extract gene annotations from EnsDb
+  annotations <- GetGRangesFromEnsDb(ensdb = EnsDb.Mmusculus.v79)
+  
+  # change to UCSC style since the data was mapped to hg19
+  seqlevelsStyle(annotations) <- 'UCSC'
+  
+  # add the gene information to the object
+  Annotation(seurat_obj) <- annotations
+  
+  return(seurat_obj)
+  
+}
+
+```
+
+## Quality Control
+
+```{r}
+
+qc <- function(seurat_obj){
+  # compute nucleosome signal score per cell
+  seurat_obj <- NucleosomeSignal(object = seurat_obj)
+  
+  # compute TSS enrichment score per cell
+  seurat_obj <- TSSEnrichment(object = seurat_obj, fast = FALSE)
+  
+  # add blacklist ratio and fraction of reads in peaks
+  seurat_obj$pct_reads_in_peaks <- seurat_obj$peak_region_fragments / seurat_obj$passed_filters * 100
+  seurat_obj$blacklist_ratio <- seurat_obj$blacklist_region_fragments / seurat_obj$peak_region_fragments
+  seurat_obj$high.tss <- ifelse(seurat_obj$TSS.enrichment > 2, 'High', 'Low')
+  
+  return(seurat_obj)
+  
+}
+
+```
+
+
+
+```{r}
+
+filter <- function(seurat_obj){
+  low_prf <- quantile(seurat_obj[["peak_region_fragments"]]$peak_region_fragments, probs = 0.02)
+  high_prf <- quantile(seurat_obj[["peak_region_fragments"]]$peak_region_fragments, probs = 0.98)
+  low_prp <- quantile(seurat_obj[["pct_reads_in_peaks"]]$pct_reads_in_peaks, probs = 0.02)
+  high_blr <- quantile(seurat_obj[["blacklist_ratio"]]$blacklist_ratio, probs = 0.98)
+  high_ns <- quantile(seurat_obj[["nucleosome_signal"]]$nucleosome_signal, probs = 0.98)
+  low_ts <- quantile(seurat_obj[["TSS.enrichment"]]$TSS.enrichment, probs = 0.02)
+
+
+  subset_seurat <- subset(
+    x = seurat_obj,
+    subset = peak_region_fragments > low_prf &
+      peak_region_fragments < high_prf &
+      pct_reads_in_peaks > low_prp &
+      blacklist_ratio < high_blr &
+      nucleosome_signal < high_ns &
+      TSS.enrichment > low_ts
+  )
+  
+  return(subset_seurat)
+  
+}
+
+```
+
+## Normalization and Dimensionality reduction
+
+### Normalization and linear dimensionality reduction (SVD)
+
+```{r}
+
+linear_dim <- function(seurat_obj){
+  
+  seurat_obj <- RunTFIDF(seurat_obj)
+  seurat_obj <- FindTopFeatures(seurat_obj, min.cutoff = 'q0')
+  seurat_obj <- RunSVD(seurat_obj)
+  
+  return(seurat_obj)
+  
+}
+
+
+```
+
+### Non-linear dimensionality reduction
+
+```{r}
+
+nonlinear_dim <- function(seurat_obj){
+  subset_seurat <- RunUMAP(object = seurat_obj, reduction = 'lsi', dims = 2:30)
+  subset_seurat <- FindNeighbors(object = subset_seurat, reduction = 'lsi', dims = 2:30)
+  subset_seurat <- FindClusters(object = subset_seurat, verbose = FALSE, algorithm = 3)
+  
+  return(subset_seurat)
+  
+}
+
+```
+
+
+# Analysis
+
+## Young Mice
+
+```{r}
+
+young <- load_data(
+  genome = "mm10",
+  count_path = '../../data/atacseq/GSE162662_RAW/GSM5723631_Young_HSC_filtered_peak_bc_matrix.h5', 
+  meta_path = '../../data/atacseq/GSE162662_RAW/GSM5723631_Young_HSC_singlecell.csv.gz', 
+  fragment_path = '../../data/atacseq/GSE162662_RAW/GSM5723631_Young_HSC_fragments.tsv.gz')
+
+young <- add_annotations(young)
+young <- qc(young)
+
+# TSSPlot(young, group.by = 'high.tss') + NoLegend()
+# FragmentHistogram(object = young, group.by = 'nucleosome_group')
+
+VlnPlot(
+  object = young,
+  features = c('pct_reads_in_peaks', 'peak_region_fragments',
+               'TSS.enrichment', 'blacklist_ratio', 'nucleosome_signal'),
+  pt.size = 0.1,
+  ncol = 5
+)
+
+young <- filter(young)
+
+VlnPlot(
+  object = young,
+  features = c('pct_reads_in_peaks', 'peak_region_fragments',
+               'TSS.enrichment', 'blacklist_ratio', 'nucleosome_signal'),
+  pt.size = 0.1,
+  ncol = 5
+)
+
+```
+
+
+## Adult Mice
+
+```{r}
+
+old <- load_data(
+  genome = "mm10",
+  count_path = '../../data/atacseq/GSE162662_RAW/GSM5723632_Aged_HSC_filtered_peak_bc_matrix.h5', 
+  meta_path = '../../data/atacseq/GSE162662_RAW/GSM5723632_Aged_HSC_singlecell.csv.gz', 
+  fragment_path = '../../data/atacseq/GSE162662_RAW/GSM5723632_Aged_HSC_fragments.tsv.gz')
+
+old <- add_annotations(old)
+old <- qc(old)
+
+# TSSPlot(aged_mice, group.by = 'high.tss') + NoLegend()
+# FragmentHistogram(object = aged_mice, group.by = 'nucleosome_group')
+
+VlnPlot(
+  object = old,
+  features = c('pct_reads_in_peaks', 'peak_region_fragments',
+               'TSS.enrichment', 'blacklist_ratio', 'nucleosome_signal'),
+  pt.size = 0.1,
+  ncol = 5
+)
+
+old <- filter(old)
+
+VlnPlot(
+  object = old,
+  features = c('pct_reads_in_peaks', 'peak_region_fragments',
+               'TSS.enrichment', 'blacklist_ratio', 'nucleosome_signal'),
+  pt.size = 0.1,
+  ncol = 5
+)
+
+old <- linear_dim(old)
+
+
+
+```
+
+## Analysis
+
+### Merge dataset
+
+```{r}
+
+young$dataset <- "young"
+old$dataset <- "old"
+
+data <- merge(young, old)
+
+```
+
+
+### Normalization and linear dimensional reduction
+
+```{r}
+
+data <- linear_dim(data)
+DepthCor(data)
+
+```
+
+### Non-linear dimensionality reduction
+
+```{r}
+
+data <- nonlinear_dim(data)
+DimPlot(object = data, label = TRUE) + NoLegend()
+
+DimPlot(object = data, label = TRUE, group.by = "dataset") + NoLegend()
+
+```
+
+
+### Gene Activity
+
+```{r}
+
+subset_seurat <- data
+
+gene.activities <- GeneActivity(subset_seurat)
+
+# add the gene activity matrix to the Seurat object as a new assay and normalize it
+subset_seurat[['RNA']] <- CreateAssayObject(counts = gene.activities)
+subset_seurat <- NormalizeData(
+  object = subset_seurat,
+  assay = 'RNA',
+  normalization.method = 'LogNormalize',
+  scale.factor = median(subset_seurat$nCount_RNA)
+)
+
+DefaultAssay(subset_seurat) <- 'RNA'
+
+FeaturePlot(
+  object = subset_seurat,
+  features = c("Kit", "Pecam1", "Itgam"),
+  pt.size = 0.1,
+  max.cutoff = 'q95',
+  ncol = 3
+)
+
+DefaultAssay(data) <- "peaks"
+
+da_peaks <- FindMarkers(
+  object = data,
+  ident.1 = rownames(data[[]][data$dataset == "old",]),
+  ident.2 = rownames(data[[]][data$dataset == "young",]),
+  min.pct = 0.05,
+  test.use = 'LR',
+  latent.vars = 'peak_region_fragments'
+)
+
+da_peaks$closest_gene <-ClosestFeature(data, regions = rownames(da_peaks))$gene_name
+da_peaks$distance <- ClosestFeature(data, regions = rownames(da_peaks))$distance
+
+CoveragePlot(
+  object = data,
+  region = rownames(da_peaks)[2],
+  extend.upstream = 10000,
+  extend.downstream = 5000,
+  group.by = "dataset"
+)
+
+plot1 <- VlnPlot(
+  object = data,
+  features = rownames(da_peaks)[2],
+  group.by = "dataset"
+)
+plot2 <- FeaturePlot(
+  object = data,
+  features = rownames(da_peaks)[2],
+  max.cutoff = 'q95'
+)
+plot1 | plot2
+
+```
+
+
+
+
+
+
+
+
+
+
