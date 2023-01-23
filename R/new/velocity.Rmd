@@ -1,0 +1,107 @@
+# Inferring RNA Velocity
+
+## Goal
+
+In this tutorial, the goal would be to infer RNA velocity i.e. the ratio of spliced vs unspliced RNA sequences during development of the cell.
+
+## Load packages
+
+```{r}
+
+if (!require("pacman", quietly = TRUE))
+  install.packages("pacman")
+        
+p_load(pacman, tidyverse, Seurat, scRNAseq, scuttle, scran, velociraptor, scater, ggplot2)
+
+```
+
+## Dataset
+
+Mouse spermatogenesis single-cell RNA-seq data from Hermann et al. (2018).
+
+```{r}
+
+sce <- HermannSpermatogenesisData()
+sce <- logNormCounts(sce, assay.type=1)
+
+dec <- modelGeneVar(sce)
+top.hvgs <- getTopHVGs(dec, n=2000)
+
+
+```
+
+### Run Velovity analysis
+
+```{r}
+
+velo.out <- scvelo(sce, subset.row=top.hvgs, assay.X="spliced")
+velo.out
+```
+
+
+### t-SNE
+
+```{r}
+
+set.seed(100)
+
+
+sce_pca <- runPCA(sce, subset_row=top.hvgs)
+sce_tsne <- runTSNE(sce_pca, dimred="PCA")
+
+sce_tsne$velocity_pseudotime <- velo.out$velocity_pseudotime
+plotTSNE(sce_tsne, colour_by="velocity_pseudotime")
+
+```
+
+```{r}
+
+embedded <- embedVelocity(reducedDim(sce_tsne, "TSNE"), velo.out)
+grid.df <- gridVectors(reducedDim(sce_tsne, "TSNE"), embedded)
+
+plotTSNE(sce_tsne, colour_by="velocity_pseudotime") +
+    geom_segment(data=grid.df, mapping=aes(x=start.1, y=start.2, 
+        xend=end.1, yend=end.2), arrow=arrow(length=unit(0.05, "inches")))
+
+```
+
+### UMAP
+
+```{r}
+
+set.seed(100)
+
+sce_umap <- runUMAP(sce_pca, dimred="PCA")
+
+sce_umap$velocity_pseudotime <- velo.out$velocity_pseudotime
+plotUMAP(sce_umap, colour_by="velocity_pseudotime")
+
+```
+
+
+```{r}
+
+embedded <- embedVelocity(reducedDim(sce_umap, "UMAP"), velo.out)
+grid.df <- gridVectors(reducedDim(sce_umap, "UMAP"), embedded)
+
+plotUMAP(sce_umap, colour_by="velocity_pseudotime") +
+    geom_segment(data=grid.df, mapping=aes(x=start.1, y=start.2, 
+        xend=end.1, yend=end.2), arrow=arrow(length=unit(0.05, "inches")))
+
+
+```
+
+
+
+```{r}
+
+p_unload(pacman, tidyverse, Seurat, scRNAseq, scuttle, scran, velociraptor, scater)
+rm(list = ls())
+
+```
+
+
+
+
+
+
