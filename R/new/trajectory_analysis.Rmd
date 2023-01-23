@@ -1,0 +1,285 @@
+# Title: Determining RNA Trajectory Analysis
+
+## Reference:
+
+[Massively parallel single-cell chromatin landscapes of human immune cell development and intratumoral T cell exhaustion](https://www.nature.com/articles/s41587-019-0206-z) [Files](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE129785)
+
+## Load packages
+
+```{r}
+
+if (!require("pacman", quietly = TRUE))
+  install.packages("pacman")
+
+remotes::install_github('satijalab/seurat-wrappers', force = TRUE)
+
+p_load(pacman, Seurat, Signac, SeuratWrappers, monocle3, ggplot2, Matrix, EnsDb.Hsapiens.v75)
+
+
+```
+
+## Load data
+
+### Create tabix file
+
+You need to install samtools to perform the analysis below.
+
+```{bash}
+
+gunzip ../../data/traj_analysis/GSM3722029_CD34_Progenitors_Rep1_fragments.tsv.gz
+
+bgzip ../../data/traj_analysis/GSM3722029_CD34_Progenitors_Rep1_fragments.tsv
+
+tabix -p bed ../../data/traj_analysis/GSM3722029_CD34_Progenitors_Rep1_fragments.tsv.gz
+
+```
+
+
+```{r}
+
+filepath <- "../../data/traj_analysis/GSE129785_scATAC-Hematopoiesis-CD34"
+
+peaks <- read.table(paste0(filepath, ".peaks.txt.gz"), header = TRUE)
+cells <- read.table(paste0(filepath, ".cell_barcodes.txt.gz"), header = TRUE, stringsAsFactors = FALSE)
+rownames(cells) <- make.unique(cells$Barcodes)
+
+mtx <- readMM(file = paste0(filepath, ".mtx"))
+mtx <- as(object = mtx, Class = "dgCMatrix")
+
+colnames(mtx) <- rownames(cells)
+rownames(mtx) <- peaks$Feature
+
+bone_assay <- CreateChromatinAssay(
+  counts = mtx,
+  min.cells = 5,
+  fragments = "../../data/traj_analysis/GSM3722029_CD34_Progenitors_Rep1_fragments.tsv.gz",
+  sep = c("_", "_"),
+  genome = "hg19"
+)
+
+bone <- CreateSeuratObject(
+  counts = bone_assay,
+  meta.data = cells,
+  assay = "ATAC"
+)
+
+# The dataset contains multiple cell types
+# We can subset to include just one replicate of CD34+ progenitor cells
+bone <- bone[, bone$Group_Barcode == "CD34_Progenitors_Rep1"]
+
+# add cell type annotations from the original paper
+cluster_names <- c("HSC",   "MEP",  "CMP-BMP",  "LMPP", "CLP",  "Pro-B",    "Pre-B",    "GMP",
+                  "MDP",    "pDC",  "cDC",  "Monocyte-1",   "Monocyte-2",   "Naive-B",  "Memory-B",
+                  "Plasma-cell",    "Basophil", "Immature-NK",  "Mature-NK1",   "Mature-NK2",   "Naive-CD4-T1",
+                  "Naive-CD4-T2",   "Naive-Treg",   "Memory-CD4-T", "Treg", "Naive-CD8-T1", "Naive-CD8-T2",
+                  "Naive-CD8-T3",   "Central-memory-CD8-T", "Effector-memory-CD8-T",    "Gamma delta T")
+num.labels <- length(cluster_names)
+names(cluster_names) <- paste0( rep("Cluster", num.labels), seq(num.labels) )
+bone$celltype <- cluster_names[as.character(bone$Clusters)]
+
+head(bone@meta.data)
+
+
+```
+
+## Genome Annotation
+
+```{r}
+
+# extract gene annotations from EnsDb
+annotations <- GetGRangesFromEnsDb(ensdb = EnsDb.Hsapiens.v75)
+
+# change to UCSC style since the data was mapped to hg19
+seqlevelsStyle(annotations) <- 'UCSC'
+
+# add the gene information to the object
+Annotation(bone) <- annotations
+
+```
+
+## Quality Control
+
+### Metrics
+
+```{r}
+
+bone <- TSSEnrichment(bone)
+bone <- NucleosomeSignal(bone)
+bone$blacklist_fraction <- FractionCountsInRegion(bone, regions = blacklist_hg19)
+
+```
+
+```{r}
+
+VlnPlot(
+  object = bone,
+  features = c("nCount_ATAC", "TSS.enrichment", "nucleosome_signal", "blacklist_fraction"),
+  pt.size = 0.1,
+  ncol = 4
+)
+
+
+```
+
+
+### Filter dataset
+
+```{r}
+
+high_nCount <- quantile(bone[["nCount_ATAC"]]$nCount_ATAC , probs = 0.98)
+high_ns <- quantile(bone[["nucleosome_signal"]]$nucleosome_signal, probs = 0.98, na.rm = TRUE)
+low_ts <- quantile(bone[["TSS.enrichment"]]$TSS.enrichment, probs = 0.02)
+
+bone <- bone[, (bone$nCount_ATAC < high_nCount) &
+               (bone$TSS.enrichment > low_ts) &
+               (bone$nucleosome_signal < high_ns)]
+
+
+```
+
+```{r}
+
+VlnPlot(
+  object = bone,
+  features = c("nCount_ATAC", "TSS.enrichment", "nucleosome_signal", "blacklist_fraction"),
+  pt.size = 0.1,
+  ncol = 4
+)
+
+
+```
+
+## Normalization and Linear dimensionality reduction
+
+```{r}
+
+bone <- FindTopFeatures(bone, min.cells = 10)
+bone <- RunTFIDF(bone)
+bone <- RunSVD(bone, n = 100)
+DepthCor(bone)
+
+
+```
+
+## Clustering and Nonlinear dimensionality reduction
+
+```{r}
+
+bone <- FindNeighbors(bone, dims = 2:50, reduction = "lsi")
+bone <- FindClusters(bone, resolution = 0.8, algorithm = 3)
+bone <- RunUMAP(
+  bone,
+  reduction = "lsi",
+  dims = 2:50,
+  reduction.name = "UMAP"
+)
+
+DimPlot(bone, label = TRUE) + NoLegend()
+
+```
+
+
+Assign each cluster to the most common cell type based on the original annotations from the paper.
+
+```{r}
+
+for(i in levels(bone)) {
+  cells_to_reid <- WhichCells(bone, idents = i)
+  newid <- names(sort(table(bone$celltype[cells_to_reid]),decreasing=TRUE))[1]
+  Idents(bone, cells = cells_to_reid) <- newid
+}
+bone$assigned_celltype <- Idents(bone)
+
+DimPlot(bone, label = TRUE)
+
+```
+
+
+Next we can subset the different lineages and create a trajectory for each lineage. Another way to build the trajectories is to use the whole dataset and build separate pseudotime trajectories for the different cell partitions found by Monocle 3.
+
+```{r}
+
+DefaultAssay(bone) <- "ATAC"
+
+erythroid <- bone[,  bone$assigned_celltype %in% c("HSC", "MEP", "CMP-BMP")]
+lymphoid <- bone[, bone$assigned_celltype %in% c("HSC", "LMPP", "GMP", "CLP", "Pro-B", "pDC", "MDP", "GMP")]
+
+```
+
+## Building Trajectories with Monocle 3
+
+We can convert the Seurat object to a CellDataSet object using the as.cell_data_set() function from SeuratWrappers and build the trajectories using Monocle 3. We’ll do this separately for erythroid and lymphoid lineages, but you could explore other strategies building a trajectory for all lineages together.
+
+
+```{r}
+
+erythroid.cds <- as.cell_data_set(erythroid)
+erythroid.cds <- cluster_cells(cds = erythroid.cds, reduction_method = "UMAP")
+erythroid.cds <- learn_graph(erythroid.cds, use_partition = TRUE)
+
+lymphoid.cds <- as.cell_data_set(lymphoid)
+lymphoid.cds <- cluster_cells(cds = lymphoid.cds, reduction_method = "UMAP")
+lymphoid.cds <- learn_graph(lymphoid.cds, use_partition = TRUE)
+
+```
+
+To compute pseudotime estimates for each trajectory we need to decide what the start of each trajectory is. In our case, we know that the hematopoietic stem cells are the progenitors of other cell types in the trajectory, so we can set these cells as the root of the trajectory. Monocle 3 includes an interactive function to select cells as the root nodes in the graph. This function will be launched if calling order_cells() without specifying the root_cells parameter. Here we’ve pre-selected some cells as the root, and saved these to a file for reproducibility. The file can be downloaded [here](https://www.dropbox.com/s/w5jbokcj9u6iq04/hsc_cells.txt)
+
+```{r}
+
+# load the pre-selected HSCs
+hsc <- readLines("../../data/traj_analysis/hsc_cells.txt")
+
+# order cells
+erythroid.cds <- order_cells(erythroid.cds, reduction_method = "UMAP", root_cells = hsc)
+lymphoid.cds <- order_cells(lymphoid.cds, reduction_method = "UMAP", root_cells = hsc)
+
+# plot trajectories colored by pseudotime
+plot_cells(
+  cds = erythroid.cds,
+  color_cells_by = "pseudotime",
+  show_trajectory_graph = TRUE
+)
+
+```
+
+```{r}
+
+plot_cells(
+  cds = lymphoid.cds,
+  color_cells_by = "pseudotime",
+  show_trajectory_graph = TRUE
+)
+
+```
+
+
+Extract the pseudotime values and add to the Seurat object
+```{r}
+
+bone <- AddMetaData(
+  object = bone,
+  metadata = erythroid.cds@principal_graph_aux@listData$UMAP$pseudotime,
+  col.name = "Erythroid"
+)
+
+bone <- AddMetaData(
+  object = bone,
+  metadata = lymphoid.cds@principal_graph_aux@listData$UMAP$pseudotime,
+  col.name = "Lymphoid"
+)
+
+FeaturePlot(bone, c("Erythroid", "Lymphoid"), pt.size = 0.1) & scale_color_viridis_c()
+
+```
+
+
+## Unload packages
+
+```{r}
+
+p_unload(pacman, Seurat, Signac, SeuratWrappers, monocle3, ggplot2, Matrix, EnsDb.Hsapiens.v75, Rsamtools)
+rm(list = ls())
+
+
+```
